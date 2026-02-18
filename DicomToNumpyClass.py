@@ -124,6 +124,40 @@ class DicomToNumpy:
                 data[class_name] = None
                 
         return data
+    
+    def get_subset(self, limit=1000):
+        """
+        Carga solo una cantidad limitada de imágenes por clase.
+        Útil para pruebas rápidas o debugging.
+        
+        Args:
+            limit (int): Cantidad máxima de imágenes a cargar por clase.
+            
+        Returns:
+            dict: Diccionario con los arrays recortados.
+        """
+        subset_data = {}
+        print(f"Cargando subconjunto de datos (Primeras {limit} imágenes)...")
+        
+        for class_name in self.classes:
+            file_path = self.output_path / f"{class_name}.npy"
+            
+            if file_path.exists():
+                # mmap_mode='r' permite leer el archivo sin cargarlo entero en RAM.
+                # Esto hace que el slicing [:limit] sea instantáneo y ahorre memoria.
+                mmap_arr = np.load(file_path, mmap_mode='r')
+                
+                # Al hacer el slice [:limit] y envolverlo en np.array(), 
+                # copiamos SOLO esa parte a la memoria RAM real.
+                images_slice = np.array(mmap_arr[:limit])
+                
+                subset_data[class_name] = images_slice
+                print(f"  -> Cargado {class_name}: {images_slice.shape}")
+            else:
+                print(f"  -> Archivo no encontrado para {class_name}")
+                subset_data[class_name] = None
+                
+        return subset_data
 
 # --- EJEMPLO DE USO ---
 if __name__ == "__main__":
