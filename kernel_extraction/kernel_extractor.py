@@ -11,17 +11,32 @@ class KernelExtractor:
 
     def is_valid_patch(self, y, x):
         """
-        Valida usando la MÁSCARA del cerebro para asegurar que 
-        estamos dentro del área de interés.
+        Valida que el parche esté 100% en tejido cerebral y aplica un 
+        filtro estricto de Unidades Hounsfield para rechazar cráneo o aire.
         """
         if y - self.half < 0 or y + self.half >= self.dicom.shape[0]: return False
         if x - self.half < 0 or x + self.half >= self.dicom.shape[1]: return False
         
         patch_mask = self.brain_mask[y-self.half : y+self.half, x-self.half : x+self.half]
         
-        # Exigimos que al menos el 50% del kernel sea tejido (valores > 0 en la máscara)
-        if np.count_nonzero(patch_mask) < (self.patch_size * self.patch_size * 0.5):
+        # REGLA 1: Exigimos que casi el 100% del parche sea considerado cerebro por la máscara
+        # Permitimos un margen mínimo (95%) por pequeños errores de redondeo.
+        if np.count_nonzero(patch_mask) < (self.patch_size * self.patch_size * 0.95):
             return False
+            
+        # REGLA 2: Filtro de seguridad por Unidades Hounsfield reales
+        dicom_patch = self.dicom[y-self.half : y+self.half, x-self.half : x+self.half]
+        
+        # El hueso brilla arriba de 200. El sangrado agudo ronda las 50-70 HU.
+        # Si un solo pixel supera los 120, hay restos de cráneo o calcificaciones severas. Lo tiramos.
+        if np.max(dicom_patch) > 120:
+            return False
+            
+        # El aire está en -1000, el LCR y edema bajan a 10-15 HU. 
+        # Si baja de -50, estamos agarrando aire fuera de la cabeza. Lo tiramos.
+        if np.min(dicom_patch) < -50:
+            return False
+            
         return True
 
     def _get_clean_patch(self, y, x):
