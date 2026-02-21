@@ -22,19 +22,50 @@ class CTProcessor:
 
     def _apply_advanced_correction(self):
         img_copy = self.raw_image.copy().astype(np.float32)
-        mean_air = np.mean(self.corner_img)
-        
-        if mean_air > -500:
-            self.was_processed = True
-            min_val = np.min(self.corner_img)
-            max_val = np.max(self.corner_img)
-            margin = 5
-            mask_air = (img_copy >= (min_val - margin)) & (img_copy <= (max_val + margin))
-            img_copy[mask_air] -= 1000
-            img_copy -= 1024
-        else:
-            self.was_processed = False
+        corner = img_copy[0:self.corner_size, 0:self.corner_size]
+
+        min_corner = np.min(corner)
+        std_corner = np.std(corner)
+
+        # 1. ¿Hay ruido en el corner? (Esto nos dice qué es el "Primer Pico")
+        if std_corner < 1.0:
+            # --- CASO A: ES UNA MÁSCARA ARTIFICIAL ---
+            # El primer pico es la máscara. El "aire real" es el segundo pico.
             
+            # Saltamos el primer pico (la máscara y cualquier ruido pegado a ella)
+            mask_value = min_corner
+            non_mask_pixels = img_copy[img_copy > (mask_value + 5)]
+
+            if len(non_mask_pixels) > 0:
+                # Encontramos dónde empieza el aire real (usamos percentil 0.1 para ignorar píxeles rotos)
+                real_air_value = np.percentile(non_mask_pixels, 0.1)
+
+                # Fijamos este aire a -1000, desplazando todo el histograma
+                offset = real_air_value + 1000
+                img_copy -= offset
+
+                self.status_msg = f"Corregido (Máscara saltada. Offset: -{int(offset)})"
+            else:
+                self.status_msg = "Error: Imagen sin tejido"
+
+        else:
+            # --- CASO B: ES RUIDO NATURAL ---
+            # El primer pico YA ES el aire real (ej: el 7191).
+            
+            # Agarramos el valor del aire (la mediana del corner es súper estable)
+            real_air_value = np.median(corner)
+
+            # Fijamos el aire a -1000, desplazando todo el histograma
+            offset = real_air_value + 1000
+            img_copy -= offset
+
+            # Ahora que el aire está anclado perfecto en -1000, cumplimos tu regla:
+            # "a ese aire le resto 1000". Tomamos todo lo que ronda el -1000 y lo hundimos.
+            mask_air = (img_copy >= -1050) & (img_copy <= -950)
+            img_copy[mask_air] -= 1000
+
+            self.status_msg = f"Corregido (Aire alineado y Abismo creado. Offset: -{int(offset)})"
+
         return img_copy, img_copy.flatten()
 
     def plot(self):
@@ -106,10 +137,47 @@ class CTManager:
     @staticmethod
     def process_batch(data):
         """
-        Recorre el diccionario, procesa cada imagen de cada array 
-        usando CTProcessor y reconstruye la estructura.
+        Recorre el diccionario anidado, procesa cada imagen DICOM 
+        usando CTProcessor y reconstruye la estructura manteniendo los overlays.
         """
-        return {
-            cls: np.array([CTProcessor(img) for img in images])
-            for cls, images in data.items()
-        }
+        processed_data = {}
+        
+        for cls, content in data.items():
+            # Si la clase no tiene datos (es None), la saltamos y mantenemos el None
+            if content is None:
+                processed_data[cls] = None
+                continue
+                
+            processed_data[cls] = {}
+            
+            # Procesamos SOLAMENTE el array que está bajo la llave 'dicom'
+            processed_data[cls]['dicom'] = np.array([CTProcessor(img) for img in content['dicom']])
+            
+            # Copiamos el array de overlays tal cual estaba (no requiere procesamiento HU)
+            processed_data[cls]['overlay'] = content['overlay']
+            
+        return processed_data
+
+    @staticmethod
+    def process_batch_clean_image(data):
+        """
+        Recorre el diccionario anidado, procesa cada imagen DICOM 
+        y extrae únicamente el 'clean_image', manteniendo la estructura y los overlays.
+        """
+        processed_data = {}
+        
+        for cls, content in data.items():
+            # Si la clase no tiene datos (es None), la saltamos y mantenemos el None
+            if content is None:
+                processed_data[cls] = None
+                continue
+                
+            processed_data[cls] = {}
+            
+            # Procesamos y extraemos SOLO el clean_image de los DICOMs
+            processed_data[cls]['dicom'] = np.array([CTProcessor(img).clean_image for img in content['dicom']])
+            
+            # Copiamos el array de overlays tal cual estaba
+            processed_data[cls]['overlay'] = content['overlay']
+            
+        return processed_data
